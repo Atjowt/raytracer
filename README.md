@@ -1,1 +1,1 @@
-![Alt text](output.ppm?raw=true "preview")
+![Alt text](/.github/preview.jpg?raw=true "preview")
