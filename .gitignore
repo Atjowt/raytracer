@@ -1,6 +1,6 @@
-*
-!.gitignore
-!README.md
-!Makefile
-!raytracer.c
-!output.ppm
+/*
+!/.gitignore
+!/README.md
+!/Makefile
+!/raytracer.c
+!/.github
