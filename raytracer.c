@@ -27,6 +27,14 @@ vec3 vec3_scale(vec3 v, double s) {
 	return (vec3) { v.x * s, v.y * s, v.z * s };
 }
 
+vec3 vec3_prod(vec3 u, vec3 v) {
+	return (vec3) { u.x * v.x, u.y * v.y, u.z * v.z };
+}
+
+vec3 vec3_lerp(vec3 a, vec3 b, double t) {
+	return vec3_add(a, vec3_scale(vec3_sub(b, a), t));
+}
+
 double vec3_dot(vec3 u, vec3 v) {
 	return u.x * v.x + u.y * v.y + u.z * v.z;
 }
@@ -63,34 +71,11 @@ vec3 vec3_random(void) {
 /*static const vec3 RIGHT = { 0.0, 0.0, -1.0 };*/
 /*static const vec3 FORWARD = { -1.0, 0.0, 0.0 };*/
 
-typedef struct {
-	double r, g, b;
-} Color;
 
-Color color_from_vec3(vec3 v) {
-	return (Color) { v.x, v.y, v.z };
-}
-
-vec3 vec3_from_color(Color color) {
-	return (vec3) { color.r, color.g, color.b };
-}
-
-Color color_mix(Color a, Color b, double t) {
-	return color_from_vec3(vec3_add(
-		vec3_scale(vec3_from_color(a), t),
-		vec3_scale(vec3_from_color(b), 1.0 - t)
-	));
-}
-
-Color color_tint(Color a, Color b) {
-	return (Color) { a.r * b.r, a.g * b.g, a.b * b.b };
-}
-
-
-/*static const Color RED = { 1.0, 0.0, 0.0 };*/
-/*static const Color GREEN = { 0.0, 1.0, 0.0 };*/
-/*static const Color BLUE = { 0.0, 0.0, 1.0 };*/
-static const Color WHITE = { 1.0, 1.0, 1.0 };
+/*static const vec3 RED = { 1.0, 0.0, 0.0 };*/
+/*static const vec3 GREEN = { 0.0, 1.0, 0.0 };*/
+/*static const vec3 BLUE = { 0.0, 0.0, 1.0 };*/
+static const vec3 WHITE = { 1.0, 1.0, 1.0 };
 
 typedef struct {
 	vec3 origin, direction;
@@ -113,12 +98,13 @@ typedef struct {
 } Sphere;
 
 typedef struct {
+	bool outfacing;
 	double t;
 	vec3 point;
 	vec3 normal;
 } Hit;
 
-bool ray_hit_sphere(Ray ray, Sphere sphere, Hit* hit) {
+bool ray_hit_sphere(Ray ray, Sphere sphere, double t_min, double t_max, Hit* hit) {
 	/*x^2 + y^2 + z^2 = r^2*/
 	/*x = a+t*dx*/
 	/*y = b+t*dy*/
@@ -145,25 +131,34 @@ bool ray_hit_sphere(Ray ray, Sphere sphere, Hit* hit) {
 	double offset = sqrt(discriminant);
 	double midpoint = -p/2.0;
 	double t1 = midpoint - offset;
-	/*double t2 = midpoint + offset;*/
+	double t2 = midpoint + offset;
+	double t = t1;
+        if (t <= t_min || t_max <= t) {
+		t = t2;
+		if (t <= t_min || t_max <= t) {
+			return false;
+		}
+	}
 	if (hit != NULL) {
 		hit->t = t1;
-		hit->point = ray_at(ray, t1);
+		hit->point = ray_at(ray, t);
 		hit->normal = vec3_scale(vec3_sub(hit->point, sphere.center), 1.0 / r);
+		hit->outfacing = (vec3_dot(ray.direction, hit->normal) < 0.0);
+		hit->normal = hit->outfacing ? hit->normal : vec3_scale(hit->normal, -1.0);
 	}
 	return true;
 }
 
 
-Color get_world_color(Ray ray) {
+vec3 get_world_color(Ray ray) {
 	/*const vec3 sun_dir = vec3_normalize((vec3) { -1.0, -1.0, -1.0 });*/
 	/*float fac = fmax(0.0, vec3_dot(ray.dir, vec3_scale(sun_dir, -1.0)));*/
-	static const Color sky_color = { 0.2, 0.4, 0.8 };
+	static const vec3 sky_color = { 0.2, 0.4, 0.8 };
 	double fac = 0.5 * (ray.direction.z + 1.0);
-	return color_mix(sky_color, WHITE, fac);
+	return vec3_lerp(sky_color, WHITE, fac);
 }
 
-vec3 material_scatter(vec3 incoming, vec3 normal) {
+vec3 scatter_diffuse(vec3 incoming, vec3 normal) {
 	vec3 outgoing = vec3_random();
 	if (vec3_dot(outgoing, normal) <= 0.0) {
 		outgoing = vec3_scale(outgoing, -1.0);
@@ -171,7 +166,18 @@ vec3 material_scatter(vec3 incoming, vec3 normal) {
 	return outgoing;
 }
 
-bool ray_hit_world(Ray ray, Hit* hit) {
+vec3 lambertian_diffuse(vec3 incoming, vec3 normal, vec3 albedo) {
+	const vec3 light_direction = vec3_normalize((vec3) { -1.0, -1.0, -1.0 });
+	double intensity = fmax(0.0, vec3_dot(normal, vec3_scale(light_direction, -1.0)));
+	vec3 color = (vec3) { 
+		albedo.x * intensity, 
+		albedo.y * intensity, 
+		albedo.z * intensity 
+	};
+	return color;
+}
+
+bool ray_hit_world(Ray ray, double t_min, double t_max, Hit* hit) {
 
 	static const Sphere sphere = {
 		.center = { 0.0, 1.5, 0.0 },
@@ -179,26 +185,41 @@ bool ray_hit_world(Ray ray, Hit* hit) {
 	};
 
 	static const Sphere ground = {
-		.center = { 0.0, 1.5, -10.5 },
-		.radius = 10.0,
+		.center = { 0.0, 1.5, -100.5 },
+		.radius = 100.0,
 	};
 
-	if (ray_hit_sphere(ray, sphere, hit)) return true;
-	if (ray_hit_sphere(ray, ground, hit)) return true;
+	bool hit_anything = false;
+	Hit hit_temp;
+	if (ray_hit_sphere(ray, sphere, t_min, t_max, &hit_temp)) {
+		hit_anything = true;
+		t_max = hit_temp.t;
+		if (hit != NULL) {
+			*hit = hit_temp;
+		}
+	}
+	if (ray_hit_sphere(ray, ground, t_min, t_max, &hit_temp)) {
+		hit_anything = true;
+		t_max = hit_temp.t;
+		if (hit != NULL) {
+			*hit = hit_temp;
+		}
+	}
 
-	return false;
+        return hit_anything;
 }
 
-Color trace_ray(Ray ray, int bounces) {
+vec3 trace_ray(Ray ray, int bounces) {
+	static const vec3 sphere_color = { 1.0, 1.0, 1.0 };
 	Hit hit;
-	if (bounces > 0 && ray_hit_world(ray, &hit)) {
-		/*return color_from_vec3(vec3_scale(vec3_add(hit.normal, (vec3) { 1.0, 1.0, 1.0 }), 0.5));*/
+	if (bounces > 0 && ray_hit_world(ray, 0.0, INFINITY, &hit)) {
+		vec3 diffuse_color = lambertian_diffuse(ray.direction, hit.normal, sphere_color);
 		Ray bounced_ray = {
 			.origin = hit.point,
-			.direction = material_scatter(ray.direction, hit.normal),
+			.direction = scatter_diffuse(ray.direction, hit.normal),
 		};
-		Color bounced_color = trace_ray(bounced_ray, bounces - 1);
-		return color_from_vec3(vec3_scale(vec3_from_color(bounced_color), 0.5));
+		vec3 bounced_color = trace_ray(bounced_ray, bounces - 1);
+		return vec3_lerp(diffuse_color, bounced_color, 0.5);
 	}
 	return get_world_color(ray);
 }
@@ -211,28 +232,38 @@ int main(void) {
 	static const double viewport_height = 1.0;
 	static const double focal_length = 1.0;
 	static const vec3 eye_pos = { 0.0, -focal_length, 0.0 };
-	static const int max_bounces = 8;
+	static const int max_bounces = 4;
+	static const int samples_per_pixel = 8;
 
-	srand(12345);
+	srand(123456);
 
 	FILE* image_file = fopen("output.ppm", "w");
 	fprintf(image_file, "P3\n%d %d\n255\n", image_width, image_height);
 	for (int pixel_y = 0; pixel_y < image_height; pixel_y++) {
+		/*printf("Rendering %d/%d", pixel_y + 1, image_height);*/
 		for (int pixel_x = 0; pixel_x < image_height; pixel_x++) {
-			double fac_x = ((double)pixel_x + 0.5) / (image_width - 1);
-			double fac_y = ((double)pixel_y + 0.5) / (image_height - 1);
-			vec3 pixel_pos = {
-				.x = (fac_x - 0.5) * viewport_width,
-				.y = 0.0,
-				.z = -(fac_y - 0.5) * viewport_height,
-			};
-			Ray ray = ray_between(eye_pos, pixel_pos);
-			Color pixel_color = trace_ray(ray, max_bounces);
-			int red_byte = 255.999 * pixel_color.r;
-			int green_byte = 255.999 * pixel_color.g;
-			int blue_byte = 255.999 * pixel_color.b;
+			vec3 total_color = { 0.0, 0.0, 0.0 };
+			for (int sample = 0; sample < samples_per_pixel; sample++) {
+				double offset_x = frand() - 0.5;
+				double offset_y = frand() - 0.5;
+				double fac_x = ((double)pixel_x + 0.5 + offset_x) / (image_width - 1);
+				double fac_y = ((double)pixel_y + 0.5 + offset_y) / (image_height - 1);
+				vec3 pixel_pos = {
+					.x = (fac_x - 0.5) * viewport_width,
+					.y = 0.0,
+					.z = -(fac_y - 0.5) * viewport_height,
+				};
+				Ray ray = ray_between(eye_pos, pixel_pos);
+				vec3 sample_color = trace_ray(ray, max_bounces);
+				total_color = vec3_add(total_color, sample_color);
+			}
+			vec3 pixel_color = vec3_scale(total_color, 1.0 / samples_per_pixel);
+			int red_byte = 255.999 * pixel_color.x;
+			int green_byte = 255.999 * pixel_color.y;
+			int blue_byte = 255.999 * pixel_color.z;
 			fprintf(image_file, "%d %d %d\n", red_byte, green_byte, blue_byte);
 		}
+		putchar('\n');
 	}
 	fclose(image_file);
 	return 0;
