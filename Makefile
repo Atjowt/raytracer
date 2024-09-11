@@ -15,7 +15,7 @@ $(NAME): $(SOURCES)
 
 run: $(NAME)
 	./$<
-	feh ./output.ppm
+	feh --force-aliasing ./output.ppm 
 
 clean:
 	rm -f ./compile_commands.json ./$(NAME)
